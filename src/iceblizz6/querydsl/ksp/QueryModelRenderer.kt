@@ -1,5 +1,8 @@
 package iceblizz6.querydsl.ksp
 
+import com.google.devtools.ksp.processing.KSPLogger
+import com.querydsl.core.types.ConstructorExpression
+import com.querydsl.core.types.Expression
 import com.querydsl.core.types.Path
 import com.querydsl.core.types.PathMetadata
 import com.querydsl.core.types.dsl.*
@@ -8,18 +11,32 @@ import com.squareup.kotlinpoet.ParameterizedTypeName.Companion.parameterizedBy
 import iceblizz6.querydsl.ksp.Naming.toCamelCase
 
 object QueryModelRenderer {
+    lateinit var logger: KSPLogger
+
+    fun initLogger(inputLogger: KSPLogger) {
+        logger = inputLogger
+    }
+
     fun render(model: QueryModel): TypeSpec {
-        return TypeSpec.classBuilder(model.className)
-            .setEntitySuperclass(model)
-            .addSuperProperty(model)
-            .addProperties(model)
-            .constructorForPath(model)
-            .constructorForMetadata(model)
-            .constructorForVariable(model)
-            .constructorForTypeMetadata(model)
-            .addInitializerCompanionObject(model)
-            .addInheritedProperties(model)
-            .build()
+        return when (model.type) {
+            QueryModelType.QUERY_PROJECTION -> TypeSpec.classBuilder(model.className)
+                .setPrimaryConstructor(model)
+                .setEntitySuperclass(model)
+                .addSuperConstructorParameter(model)
+                .build()
+
+            else -> TypeSpec.classBuilder(model.className)
+                .setEntitySuperclass(model)
+                .addSuperProperty(model)
+                .addProperties(model)
+                .constructorForPath(model)
+                .constructorForMetadata(model)
+                .constructorForVariable(model)
+                .constructorForTypeMetadata(model)
+                .addInitializerCompanionObject(model)
+                .addInheritedProperties(model)
+                .build()
+        }
     }
 
     private fun TypeSpec.Builder.setEntitySuperclass(model: QueryModel): TypeSpec.Builder {
@@ -31,8 +48,12 @@ object QueryModelRenderer {
         }
         superclass(
             when (model.type) {
-                QueryModelType.ENTITY, QueryModelType.SUPERCLASS -> EntityPathBase::class.asClassName().parameterizedBy(constraint)
+                QueryModelType.ENTITY, QueryModelType.SUPERCLASS -> EntityPathBase::class.asClassName()
+                    .parameterizedBy(constraint)
+
                 QueryModelType.EMBEDDABLE -> BeanPath::class.asClassName().parameterizedBy(constraint)
+                QueryModelType.QUERY_PROJECTION -> ConstructorExpression::class.asClassName()
+                    .parameterizedBy(constraint)
             }
         )
         return this
@@ -93,29 +114,44 @@ object QueryModelRenderer {
             is QPropertyType.ListCollection -> {
                 val inner = type.innerType
                 PropertySpec
-                    .builder(name, ListPath::class.asClassName().parameterizedBy(inner.originalTypeName, inner.pathTypeName))
+                    .builder(
+                        name,
+                        ListPath::class.asClassName().parameterizedBy(inner.originalTypeName, inner.pathTypeName)
+                    )
                     .initializer("createList(\"$name\", ${inner.originalClassName}::class.java, ${inner.pathClassName}::class.java, null)")
                     .build()
             }
+
             is QPropertyType.MapCollection -> {
                 val keyType = type.keyType
                 val valueType = type.valueType
                 PropertySpec
-                    .builder(name, MapPath::class.asClassName().parameterizedBy(keyType.originalTypeName, valueType.originalTypeName, valueType.pathTypeName))
+                    .builder(
+                        name,
+                        MapPath::class.asClassName().parameterizedBy(
+                            keyType.originalTypeName,
+                            valueType.originalTypeName,
+                            valueType.pathTypeName
+                        )
+                    )
                     .initializer("createMap(\"$name\", ${keyType.originalClassName}::class.java, ${valueType.originalClassName}::class.java, ${valueType.pathClassName}::class.java)")
                     .build()
             }
+
             is QPropertyType.SetCollection -> {
                 val inner = type.innerType
                 PropertySpec
-                    .builder(name, SetPath::class.asClassName().parameterizedBy(inner.originalTypeName, inner.pathTypeName))
+                    .builder(
+                        name,
+                        SetPath::class.asClassName().parameterizedBy(inner.originalTypeName, inner.pathTypeName)
+                    )
                     .initializer("createSet(\"$name\", ${inner.originalClassName}::class.java, ${inner.pathClassName}::class.java, null)")
                     .build()
             }
         }
     }
 
-    private fun renderUnknownProperty(name: String, type: QPropertyType.Unknown) : PropertySpec {
+    private fun renderUnknownProperty(name: String, type: QPropertyType.Unknown): PropertySpec {
         return PropertySpec
             .builder(name, SimplePath::class.asClassName().parameterizedBy(type.originalTypeName))
             .initializer("createSimple(\"$name\", ${type.originalClassName}::class.java)")
@@ -219,6 +255,30 @@ object QueryModelRenderer {
             )
             .build()
         addType(companionObject)
+        return this
+    }
+
+    private fun TypeSpec.Builder.setPrimaryConstructor(model: QueryModel): TypeSpec.Builder {
+        val constructorSpec = FunSpec.constructorBuilder().apply {
+            model.properties.forEach {
+                addParameter(
+                    it.name,
+                    Expression::class.asClassName().parameterizedBy(it.type.originalTypeName)
+                )
+            }
+        }.build()
+        primaryConstructor(constructorSpec)
+        return this
+    }
+
+    private fun TypeSpec.Builder.addSuperConstructorParameter(model: QueryModel): TypeSpec.Builder {
+        val paramTypes = model.properties.joinToString(", ", prefix = "arrayOf(", postfix = ")") {
+            "${it.type.originalClassName}::class.java"
+        }
+        val paramNames = model.properties.joinToString(", ") { it.name }
+        addSuperclassConstructorParameter(
+            "${model.originalClassName}::class.java, $paramTypes, $paramNames"
+        )
         return this
     }
 }

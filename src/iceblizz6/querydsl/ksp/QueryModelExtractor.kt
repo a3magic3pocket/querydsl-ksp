@@ -1,6 +1,7 @@
 package iceblizz6.querydsl.ksp
 
 import com.google.devtools.ksp.getDeclaredProperties
+import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
@@ -10,7 +11,8 @@ import com.squareup.kotlinpoet.ksp.toClassName
 import jakarta.persistence.Transient
 
 class QueryModelExtractor(
-    private val settings: KspSettings
+    private val settings: KspSettings,
+    private val logger: KSPLogger,
 ) {
     private val transientClassName = Transient::class.asClassName()
     private val processed = mutableMapOf<String, ModelDeclaration>()
@@ -63,6 +65,7 @@ class QueryModelExtractor(
     private fun processProperties() {
         processed.values.map { modelDeclaration ->
             val properties = extractProperties(modelDeclaration.declaration)
+            logger.info("properties:  ${properties.joinToString(", ")}")
             modelDeclaration.model.properties.addAll(properties)
         }
     }
